@@ -1,3 +1,4 @@
+import datetime
 import tensorflow as tf
 import numpy as np
 from kymatio.keras import Scattering1D
@@ -18,7 +19,7 @@ from keras import backend as K
 N_TRAIN_EXAMPLES = 3000
 N_VALID_EXAMPLES = 1000
 BATCHSIZE = 16
-EPOCHS = 12
+EPOCHS = 100
 CLASSES = CLASSES
 WINDOW_SIZE = 256
 CHANNELS = 6
@@ -52,22 +53,85 @@ def create_conv_block(inputs,inputs_shape =None):
     return cx
 
 
-def apply_scattering_1d(input_layer):
+def apply_scattering_1d(trial,input_layer,input_shape):
     channels = Lambda(lambda x: tf.unstack(x, axis=-1))(input_layer)
-    scattering_1d = Scattering1D(J=6,T=WINDOW_SIZE,Q=3)
+    #input_layer_shape = input_layer.shape
+    scattering_1d = Scattering1D(J=7,T=WINDOW_SIZE,Q=4)
+    #scatters = scattering_1d(input_layer)
     scatters = []
     print('Starting scattering....')
     for channel in channels:
         s = scattering_1d(channel)
         scatters.append(s)
-        new_shape = s.shape
     print('Finished scattering....')
-    channels = []
-    for s in scatters:
-        channels.append(s[:,:,0])
-    channels = tf.stack(channels,axis=2)
-    return scatters, new_shape
+    # channels = []
+    # for s in scatters:
+    #     channels.append(s[:,:,0])
+    # channels = tf.stack(channels,axis=2)
+    return scatters
+
+def conv_block2(trial,inputs,input_shape =None):
+    print('Applying conv block 2 ....')
+    input_shape = inputs[0].shape
+    conved_inputs = []
+    for input in inputs:
+        x = Conv1D(filters=128,
+                    kernel_size = 3,
+                    activation='relu',input_shape= input_shape)(input)
+        conved_inputs.append(x)
     
+    print('Finished conv block 2')
+    return conved_inputs
+
+def conv_block1(trial,inputs):
+    print('Applying conv block 1 ....')
+    input_shape = inputs[0].shape
+    conved_inputs = []
+    for input in inputs:
+        x = Conv1D(filters=24,
+                    kernel_size = 3,
+                    activation='relu',input_shape= input_shape)(input)
+
+        x = MaxPooling1D(pool_size=3)(x)
+        conved_inputs.append(x)
+    
+    print('Finished conv block 1')
+    return conved_inputs
+
+    
+def create_model_2conv():
+    input_shape = (WINDOW_SIZE,CHANNELS)
+    input_layer = Input(shape=input_shape, name='acc_gyr')
+    scatters = apply_scattering_1d(input_layer,input_shape)#for each channel
+    # Create the convolutional block for the single input
+    x = conv_block1(trial,scatters)
+    x = conv_block2(trial,x)
+    #x = conv_block3(trial,x)
+    #x = conv_block4(trial,x)
+    concat_layer = Concatenate(axis=2)
+    x= concat_layer(x)
+    #x= conv_block3(trial,x)
+    
+
+    x = Flatten()(x)
+    x = Dense(512,activation='relu')(x)
+    x = Dense(256,activation='relu')(x)
+    x = Dense(128,activation='relu')(x)
+    x = Dense(32,activation='relu')(x)
+    x = Dense(8,activation='relu')(x)
+    # Output layer
+    output_layer = Dense(1,activation='sigmoid')(x)
+
+
+    # Create the model with single input and one output
+    model = Model(inputs=input_layer, outputs=output_layer)
+    learning_rate = 0.0035
+    # optimizer = RMSprop(learning_rate=learning_rate)
+    optz = keras.optimizers.Adam(learning_rate=learning_rate)
+    #try to use hinge,focal,logistic loss
+    model.compile(loss='binary_crossentropy', optimizer=optz, metrics=[f1_score])
+    return model
+
 
 def create_model():
     input_shape = (WINDOW_SIZE,CHANNELS)
@@ -103,24 +167,26 @@ def create_model():
 
 if __name__ == "__main__":
     
-    inputs = get_inputs()
-    train_ds,val_ds,test_ds = get_datasets(inputs)
+    data_path, batch_size,max_window_size,new_label_name,new_label_func,chosen_features ,label_name = get_inputs()
+    train_ds,val_ds,test_ds = get_datasets(data_path, batch_size,max_window_size,new_label_name,new_label_func,chosen_features ,label_name)
 
-    model = create_model()
+    model = create_model_2conv()
     #train model and save best epoch
     # Fit the model on the training data.
     # The KerasPruningCallback checks for pruning condition every epoch.
+    log_dir = "logs/fit/" + datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+    tensorboard_callback = tf.keras.callbacks.TensorBoard(log_dir=log_dir, histogram_freq=1)
 
     model.fit(
         train_ds,
         batch_size=BATCHSIZE,
-        callbacks=[ModelCheckpoint(filepath = '/tmp/checkpoint',monitor=f1_score,save_best_only=True,mode='max')],
+        callbacks=[ModelCheckpoint(filepath = '/tmp/checkpoint',monitor=f1_score,save_best_only=True,mode='max'),tensorboard_callback],
         epochs=EPOCHS,
         validation_data=val_ds,
         verbose=1,
     )
-    loss,f1_score = model.evaluate(test_ds, verbose=0)
-    print(f1_score )
+    loss,f_one = model.evaluate(test_ds, verbose=0)
+    print(f_one )
     print(loss)
 
     model.save('Yonis_model.h5')

@@ -7,10 +7,9 @@ from keras.models import Model
 from tensorflow import keras
 from keras.optimizers import RMSprop
 from keras.utils import to_categorical
-from tfrecord_generator import create_tfrecord_dataset
 from keras.layers import Input, Conv1D, MaxPooling1D, Flatten, Dense, Dropout, BatchNormalization, Concatenate
 from keras.callbacks import ModelCheckpoint
-from create_ds import get_train_val_test_dataset,DS_BATCH_SIZE,DS_WINDOW_SIZE
+from tfrecord_generator.create_ds import get_datasets,get_inputs
 from models import create_model, CLASSES
 from keras import backend as K
 
@@ -18,10 +17,10 @@ from keras import backend as K
 
 N_TRAIN_EXAMPLES = 3000
 N_VALID_EXAMPLES = 1000
-BATCHSIZE = DS_BATCH_SIZE
+BATCHSIZE = 16
 EPOCHS = 12
 CLASSES = CLASSES
-WINDOW_SIZE = DS_WINDOW_SIZE
+WINDOW_SIZE = 256
 CHANNELS = 6
 
 
@@ -102,14 +101,11 @@ def create_model():
 
 
 
-
-
-
-
-
 if __name__ == "__main__":
     
-    train_ds,val_ds,test_ds = get_train_val_test_dataset()
+    inputs = get_inputs()
+    train_ds,val_ds,test_ds = get_datasets(inputs)
+
     model = create_model()
     #train model and save best epoch
     # Fit the model on the training data.

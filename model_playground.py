@@ -14,7 +14,7 @@ from keras.optimizers import RMSprop
 from keras.utils import to_categorical
 from tfrecord_generator import create_tfrecord_dataset
 from keras.layers import Input, Conv1D, MaxPooling1D, Flatten, Dense, Dropout, BatchNormalization, Concatenate
-from create_ds import DS_BATCH_SIZE, DS_WINDOW_SIZE, get_train_val_test_dataset
+from tfrecord_generator.create_ds import DS_BATCH_SIZE, DS_WINDOW_SIZE, get_train_val_test_dataset
 
 from custom.losses import *
 from custom.callbacks import f1_fp

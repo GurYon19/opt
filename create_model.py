@@ -1,5 +1,7 @@
 import datetime
 import re
+from matplotlib import pyplot as plt
+from sklearn.decomposition import PCA
 import tensorflow as tf
 import numpy as np
 from kymatio.keras import Scattering1D
@@ -20,7 +22,7 @@ from keras import backend as K
 N_TRAIN_EXAMPLES = 3000
 N_VALID_EXAMPLES = 1000
 BATCHSIZE = 16
-EPOCHS = 1
+EPOCHS = 3
 CLASSES = CLASSES
 WINDOW_SIZE = 256
 CHANNELS = 6
@@ -36,7 +38,7 @@ def f1_score(y_true, y_pred):
     return f1_val
 
 def create_conv_block(inputs,inputs_shape =None):
-    print('Applying conv block....')
+    #print('Applying conv block....')
     conved_inputs = []
     for input in inputs:
         x = Conv1D(filters=12,
@@ -49,7 +51,7 @@ def create_conv_block(inputs,inputs_shape =None):
         #convert x a to tensorflow tensor
     concat_layer = Concatenate(axis=2)
     cx = concat_layer(conved_inputs)
-    print('Finished conv block')
+    #print('Finished conv block')
     return cx
 
 
@@ -59,11 +61,11 @@ def apply_scattering_1d(input_layer):
     scattering_1d = Scattering1D(J=7,T=WINDOW_SIZE,Q=3)
     #scatters = scattering_1d(input_layer)
     scatters = []
-    print('Starting scattering....')
+    #print('Starting scattering....')
     for channel in channels:
         s = scattering_1d(channel)
         scatters.append(s)
-    print('Finished scattering....')
+    #print('Finished scattering....')
     # channels = []
     # for s in scatters:
     #     channels.append(s[:,:,0])
@@ -71,7 +73,7 @@ def apply_scattering_1d(input_layer):
     return scatters
 
 def conv_block2(inputs,input_shape =None):
-    print('Applying conv block 2 ....')
+    #print('Applying conv block 2 ....')
     input_shape = inputs[0].shape
     conved_inputs = []
     for input in inputs:
@@ -80,11 +82,11 @@ def conv_block2(inputs,input_shape =None):
                     activation='relu',input_shape= input_shape)(input)
         conved_inputs.append(x)
     
-    print('Finished conv block 2')
+    #print('Finished conv block 2')
     return conved_inputs
 
 def conv_block1(inputs):
-    print('Applying conv block 1 ....')
+    #print('Applying conv block 1 ....')
     input_shape = inputs[0].shape
     conved_inputs = []
     for input in inputs:
@@ -95,7 +97,7 @@ def conv_block1(inputs):
         x = MaxPooling1D(pool_size=3)(x)
         conved_inputs.append(x)
     
-    print('Finished conv block 1')
+    #print('Finished conv block 1')
     return conved_inputs
 
 @keras.saving.register_keras_serializable(package="My_Layers")
@@ -229,6 +231,66 @@ def _load_model(train_ds,val_ds,test_ds):
     print(f_one)
     print(loss)
 
+
+def extract_features(tfrecord_dataset,feature_extractor):
+    #iterate over tfrecord_dataset and extract features
+    # iterator = tfrecord_dataset.make_one_shot_iterator()
+    # features = iterator.get_next()
+    # loop on tfrecord_dataset and extract using tfrecord_dataset.take()
+    features_list = []
+    labels_list = [] 
+    j = 0
+    while j//BATCHSIZE < 8:
+        try:
+            one_batch_dataset = tfrecord_dataset.take(1)
+            for features_batch, labels_batch in one_batch_dataset:
+                # batch is now a single batch from your dataset
+                # batch['feature_name'] will be a tensor containing the 'feature_name' feature for all elements in this batch
+                for i in range(BATCHSIZE):
+                    # For each element in the batch, extract and process the features as needed
+                    single_element_features = features_batch[i]
+                    #turn single_element_features with shape (256,6) to (None,256,6)
+                    single_element_features = tf.expand_dims(single_element_features, axis=0)
+                    features = feature_extractor(single_element_features)
+                    features = features.numpy()
+                    single_element_label = labels_batch[i]
+                    label  = single_element_label.numpy()
+                    #convert label to int
+                    label = int(label)
+                    features_list.append(features)
+                    labels_list.append(label)
+
+        except tf.errors.OutOfRangeError:
+            break
+        j = j+ 1
+    return features_list,labels_list
+
+
+def plot_pca(features,labels):
+    #reduce features dim from (16,1,128) to (16,128). features is a list
+    features = np.array(features)
+    labels = np.array(labels)
+    features = features.squeeze(axis=1)
+    pca = PCA(n_components=2)
+    principal_components = pca.fit_transform(features)
+    plt.figure()
+    colors = ['b', 'r']
+    target_names = [0, 1]
+
+    for color, i, target_name in zip(colors, [0, 1], target_names):
+        plt.scatter(principal_components[labels == i, 0], 
+                    principal_components[labels == i, 1], 
+                    color=color, 
+                    label=target_name)
+
+    plt.legend(loc='best')
+    plt.title('PCA of Dataset')
+    plt.xlabel('Principal Component 1')
+    plt.ylabel('Principal Component 2')
+    plt.show()
+
+
+
 if __name__ == "__main__":
     
     data_path, batch_size,max_window_size,new_label_name,new_label_func,chosen_features ,label_name = get_inputs()
@@ -255,4 +317,11 @@ if __name__ == "__main__":
     print(loss)
 
     model.save('Yonis_model.h5')
-    _load_model(train_ds,val_ds,test_ds)
+    #_load_model(train_ds,val_ds,test_ds)
+
+
+    feature_extractor = Model(inputs=model.input, outputs=model.layers[-4].output)
+    features_list,labels_list = extract_features(test_ds,feature_extractor) #keys are features, values are labels
+    
+    plot_pca(features_list,labels_list)
+    print('f1_score: ',f_one)

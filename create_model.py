@@ -1,4 +1,5 @@
 import datetime
+import re
 import tensorflow as tf
 import numpy as np
 from kymatio.keras import Scattering1D
@@ -19,7 +20,7 @@ from keras import backend as K
 N_TRAIN_EXAMPLES = 3000
 N_VALID_EXAMPLES = 1000
 BATCHSIZE = 16
-EPOCHS = 100
+EPOCHS = 1
 CLASSES = CLASSES
 WINDOW_SIZE = 256
 CHANNELS = 6
@@ -33,7 +34,6 @@ def f1_score(y_true, y_pred):
     recall = true_positives / (possible_positives + K.epsilon())
     f1_val = 2*(precision*recall)/(precision+recall+K.epsilon())
     return f1_val
-
 
 def create_conv_block(inputs,inputs_shape =None):
     print('Applying conv block....')
@@ -53,10 +53,10 @@ def create_conv_block(inputs,inputs_shape =None):
     return cx
 
 
-def apply_scattering_1d(trial,input_layer,input_shape):
+def apply_scattering_1d(input_layer):
     channels = Lambda(lambda x: tf.unstack(x, axis=-1))(input_layer)
     #input_layer_shape = input_layer.shape
-    scattering_1d = Scattering1D(J=7,T=WINDOW_SIZE,Q=4)
+    scattering_1d = Scattering1D(J=7,T=WINDOW_SIZE,Q=3)
     #scatters = scattering_1d(input_layer)
     scatters = []
     print('Starting scattering....')
@@ -70,7 +70,7 @@ def apply_scattering_1d(trial,input_layer,input_shape):
     # channels = tf.stack(channels,axis=2)
     return scatters
 
-def conv_block2(trial,inputs,input_shape =None):
+def conv_block2(inputs,input_shape =None):
     print('Applying conv block 2 ....')
     input_shape = inputs[0].shape
     conved_inputs = []
@@ -83,7 +83,7 @@ def conv_block2(trial,inputs,input_shape =None):
     print('Finished conv block 2')
     return conved_inputs
 
-def conv_block1(trial,inputs):
+def conv_block1(inputs):
     print('Applying conv block 1 ....')
     input_shape = inputs[0].shape
     conved_inputs = []
@@ -98,14 +98,59 @@ def conv_block1(trial,inputs):
     print('Finished conv block 1')
     return conved_inputs
 
-    
+@keras.saving.register_keras_serializable(package="My_Layers")
+class CustomLayer(keras.layers.Layer):
+    def __init__(self,J):
+        super().__init__()
+        self.J = J
+    def call(self, inputs):
+        return apply_scattering_1d(inputs)
+
+    def get_config(self):
+        return {"J": self.J}
+
+# @keras.saving.register_keras_serializable(package="my_package", name="custom_scat")
+# def custom_scat(x):
+#     return apply_scattering_1d(x)
+
+
+@keras.utils.register_keras_serializable(package="my_package", name="f1_score")
+class F1Score(keras.metrics.Metric):
+    def __init__(self, name="f1_score", **kwargs):
+        super(F1Score, self).__init__(name=name, **kwargs)
+        self.true_positives = self.add_weight("true_positives", initializer="zeros")
+        self.false_positives = self.add_weight("false_positives", initializer="zeros")
+        self.false_negatives = self.add_weight("false_negatives", initializer="zeros")
+
+    def update_state(self, y_true, y_pred, sample_weight=None):
+        y_true = tf.cast(y_true, tf.float32)
+        y_pred = tf.cast(tf.math.round(y_pred), tf.float32)
+
+        true_positives = tf.reduce_sum(y_true * y_pred)
+        false_positives = tf.reduce_sum((1 - y_true) * y_pred)
+        false_negatives = tf.reduce_sum(y_true * (1 - y_pred))
+
+        self.true_positives.assign_add(true_positives)
+        self.false_positives.assign_add(false_positives)
+        self.false_negatives.assign_add(false_negatives)
+
+    def result(self):
+        precision = self.true_positives / (self.true_positives + self.false_positives + tf.keras.backend.epsilon())
+        recall = self.true_positives / (self.true_positives + self.false_negatives + tf.keras.backend.epsilon())
+
+        f1 = 2 * (precision * recall) / (precision + recall + tf.keras.backend.epsilon())
+        return f1
+
+
 def create_model_2conv():
     input_shape = (WINDOW_SIZE,CHANNELS)
     input_layer = Input(shape=input_shape, name='acc_gyr')
-    scatters = apply_scattering_1d(input_layer,input_shape)#for each channel
+    custom_scattering1d =CustomLayer(7)
+    scatters = custom_scattering1d(input_layer)
+    #scatters = apply_scattering_1d(input_layer)#for each channel
     # Create the convolutional block for the single input
-    x = conv_block1(trial,scatters)
-    x = conv_block2(trial,x)
+    x = conv_block1(scatters)
+    x = conv_block2(x)
     #x = conv_block3(trial,x)
     #x = conv_block4(trial,x)
     concat_layer = Concatenate(axis=2)
@@ -129,7 +174,7 @@ def create_model_2conv():
     # optimizer = RMSprop(learning_rate=learning_rate)
     optz = keras.optimizers.Adam(learning_rate=learning_rate)
     #try to use hinge,focal,logistic loss
-    model.compile(loss='binary_crossentropy', optimizer=optz, metrics=[f1_score])
+    model.compile(loss='binary_crossentropy', optimizer=optz,  metrics=['accuracy', F1Score()])
     return model
 
 
@@ -159,17 +204,37 @@ def create_model():
     learning_rate = 0.003124287817877256
     _optimizer = keras.optimizers.Adam(learning_rate=learning_rate)
     # optimizer = RMSprop(learning_rate=learning_rate)
-    model.compile(loss='binary_crossentropy' , optimizer=_optimizer, metrics=[f1_score])
+    model.compile(loss='binary_crossentropy' , optimizer=_optimizer, metrics=[F1Score])
     return model
 
 
-
+def _load_model(train_ds,val_ds,test_ds):
+    #import load_model
+    from keras.models import load_model
+    #load Yonis_model.h5
+    model_path = 'Yonis_model.h5'
+    #load the model
+    model = load_model(model_path,custom_objects={'f1_score':F1Score,'CustomLayer':CustomLayer})
+    #model.summary()
+    #model.fit(train_ds,epochs=1)
+    #continue training
+    model.fit(train_ds,
+        batch_size=BATCHSIZE,
+        epochs=EPOCHS,
+        validation_data=val_ds,
+        verbose=1,
+        )
+    loss,acc,f_one = model.evaluate(test_ds, verbose=0)
+    print(acc)
+    print(f_one)
+    print(loss)
 
 if __name__ == "__main__":
     
     data_path, batch_size,max_window_size,new_label_name,new_label_func,chosen_features ,label_name = get_inputs()
     train_ds,val_ds,test_ds = get_datasets(data_path, batch_size,max_window_size,new_label_name,new_label_func,chosen_features ,label_name)
-
+    #train_ds,val_ds,test_ds = get_datasets(data_path)
+    
     model = create_model_2conv()
     #train model and save best epoch
     # Fit the model on the training data.
@@ -185,8 +250,9 @@ if __name__ == "__main__":
         validation_data=val_ds,
         verbose=1,
     )
-    loss,f_one = model.evaluate(test_ds, verbose=0)
-    print(f_one )
+    loss,acc,f_one = model.evaluate(test_ds, verbose=0)
+    print(f_one)
     print(loss)
 
     model.save('Yonis_model.h5')
+    _load_model(train_ds,val_ds,test_ds)

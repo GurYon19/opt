@@ -139,15 +139,36 @@ class F1Score( keras.metrics.Metric):
 
 
 def create_model_2conv():
-    input_shape = (WINDOW_SIZE,CHANNELS)
-    input_layer = Input(shape=input_shape, name='acc_gyr')
-    channels = keras.layers.Lambda(lambda x: tf.unstack(x, axis=-1))(input_layer)
+    input_shape = (WINDOW_SIZE,)
+    input_layer_1 = Input(shape=input_shape, name='Gyro1')
+    input_layer_2 = Input(shape=input_shape, name='Gyro2')
+    input_layer_3 = Input(shape=input_shape, name='Gyro3')
+    input_layer_4 = Input(shape=input_shape, name='Acc1')
+    input_layer_5 = Input(shape=input_shape, name='Acc2')
+    input_layer_6 = Input(shape=input_shape, name='Acc3')
+    inputs = [input_layer_1,input_layer_2,input_layer_3,input_layer_4,input_layer_5,input_layer_6]
+
+    #channels = keras.layers.Lambda(lambda x: tf.unstack(x, axis=-1))(input_layer)
+
     custom_scattering1d =CustomLayer(7)
-    scatters = []
-    for channel in channels:
-        s = custom_scattering1d(channel)
-        scatters.append(s)
-    x = conv_block1(scatters)
+    output_layer_1 = custom_scattering1d(input_layer_1)
+    output_layer_2 = custom_scattering1d(input_layer_2)
+    output_layer_3 = custom_scattering1d(input_layer_3)
+    output_layer_4 = custom_scattering1d(input_layer_4)
+    output_layer_5 = custom_scattering1d(input_layer_5)
+    output_layer_6 = custom_scattering1d(input_layer_6)
+    #concat all the output layers
+    #concat_layer = Concatenate(axis=2)
+    #x= concat_layer([output_layer_1,output_layer_2,output_layer_3,output_layer_4,output_layer_5,output_layer_6])
+    kymatio_inputs = [output_layer_1,output_layer_2,output_layer_3,output_layer_4,output_layer_5,output_layer_6]
+    #remove the last dimension of the output layers
+    #outputs = [tf.squeeze(output_layer, axis=3) for output_layer in outputs]
+    #outputs = [tf.squeeze(output_layer, axis=1) for output_layer in outputs]
+
+    
+
+    #channels = apply_scattering_1d(input_layer)    
+    x = conv_block1(kymatio_inputs)
     x = conv_block2(x)
 
     concat_layer = Concatenate(axis=2)
@@ -166,7 +187,7 @@ def create_model_2conv():
 
 
     # Create the model with single input and one output
-    model = Model(inputs=input_layer, outputs=output_layer)
+    model = Model(inputs=kymatio_inputs, outputs=output_layer)
     learning_rate = 0.0035
     # optimizer = RMSprop(learning_rate=learning_rate)
     optz = keras.optimizers.Adam(learning_rate=learning_rate)
@@ -296,6 +317,7 @@ def get_dataset(create = True):
 def get_model(train_ds,val_ds,test_ds,create = True):
     if create:
         model = create_model_2conv()
+        save_model(model,'6_inputs.h5')
         #train model and save best epoch
         # Fit the model on the training data.
         # The KerasPruningCallback checks for pruning condition every epoch.
@@ -311,7 +333,7 @@ def get_model(train_ds,val_ds,test_ds,create = True):
             validation_data=val_ds,
             verbose=1,
         )
-        loss,acc,f_one = model.evaluate(test_ds, verbose=0)
+        loss,f_one = model.evaluate(test_ds, verbose=0)
         print(f_one)
         print(loss)
 

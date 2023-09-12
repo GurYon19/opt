@@ -23,7 +23,7 @@ import plotly
 N_TRAIN_EXAMPLES = 3000
 N_VALID_EXAMPLES = 1000
 BATCHSIZE = 16
-EPOCHS = 2
+EPOCHS = 5
 CLASSES = CLASSES
 WINDOW_SIZE = 256
 CHANNELS = 6
@@ -233,11 +233,13 @@ def _load_model(train_ds,val_ds,test_ds):
     print(acc)
     print(f_one)
     print(loss)
+    save_model(model,'Yonis_model.h5')
     return model
 
 
 def extract_features(tfrecord_dataset,feature_extractor):
-    number_of_batches = 20
+    print("Starting feature extraction")
+    number_of_batches = 50
     features_list = []
     labels_list = [] 
 
@@ -272,27 +274,24 @@ def plot_pca(features,labels):
     pc_a = PCA(n_components=2, random_state=42)
     x_pca = pc_a.fit_transform(features)
     X_tsne = tsne.fit_transform(features)
-    plt.figure(figsize=(10, 8))
-    #remove duplicates from X_tsne 
+
     print(X_tsne.shape)
-    #X_set = set(X_tsne)
-    #X_tsne = np.unique(X_tsne, axis=0)
-    #print(X_set)
-    #print(X_tsne[:, 0])
-    #print(X_tsne[:, 1])
-    scatter = plt.scatter(X_tsne[:, 0], X_tsne[:, 1], c=labels, cmap='viridis', marker='o', s=30, alpha=0.9)
-    plt.title("t-SNE Visualization")
-    plt.xlabel("t-SNE Dimension 1")
-    plt.ylabel("t-SNE Dimension 2")
-    plt.colorbar(scatter, label="Labels")
-    #plt.show()
 
 
     #plot scatter of X_tsne with labels in plotly
     import plotly.express as px
-    fig = px.scatter(X_tsne, x=X_tsne[:, 0], y=X_tsne[:, 1], color=labels)
-    fig.show()
-
+    fig_tsne = px.scatter(X_tsne, x=X_tsne[:, 0], y=X_tsne[:, 1], color=labels)
+    
+    #add x axis labels to plotly
+    fig_tsne.update_xaxes(title_text="t-SNE Dimension 1")
+    fig_tsne.update_yaxes(title_text="t-SNE Dimension 2")
+    fig_tsne.show()
+    fig_pca = px.scatter(x_pca, x=x_pca[:, 0], y=x_pca[:, 1], color=labels) 
+    #add x axis labels to plotly
+    fig_pca.update_xaxes(title_text="PCA Dimension 1")
+    fig_pca.update_yaxes(title_text="PCA Dimension 2")
+    fig_pca.show()
+    print('finished_plot')
 
 def get_dataset(create = True):
     data_path, batch_size,max_window_size,new_label_name,new_label_func,chosen_features ,label_name = get_inputs()
@@ -338,8 +337,8 @@ if __name__ == "__main__":
     
 
 
-    feature_extractor = Model(inputs=model.input, outputs=model.layers[-6].output)
-    features_list,labels_list = extract_features(test_ds,feature_extractor) #keys are features, values are labels
+    feature_extractor = Model(inputs=model.input, outputs=model.layers[-7].output)
+    features_list,labels_list = extract_features(train_ds,feature_extractor) #keys are features, values are labels
     
     plot_pca(features_list,labels_list)
     #print('f1_score: ',f_one)

@@ -23,7 +23,7 @@ import plotly
 N_TRAIN_EXAMPLES = 3000
 N_VALID_EXAMPLES = 1000
 BATCHSIZE = 16
-EPOCHS = 5
+EPOCHS = 40
 CLASSES = CLASSES
 WINDOW_SIZE = 256
 CHANNELS = 6
@@ -119,31 +119,23 @@ class CustomLayer(keras.layers.Layer):
 
 
 #@keras.utils.register_keras_serializable(package="my_package", name="f1_score")
-class F1Score(keras.metrics.Metric):
+class F1Score( keras.metrics.Metric):
+
     def __init__(self, name="f1_score", **kwargs):
         super(F1Score, self).__init__(name=name, **kwargs)
-        self.true_positives = self.add_weight("true_positives", initializer="zeros")
-        self.false_positives = self.add_weight("false_positives", initializer="zeros")
-        self.false_negatives = self.add_weight("false_negatives", initializer="zeros")
+        self.precision = tf.keras.metrics.Precision()
+        self.recall = tf.keras.metrics.Recall()
 
-    def update_state(self, y_true, y_pred, sample_weight=None):
-        y_true = tf.cast(y_true, tf.float32)
-        y_pred = tf.cast(tf.math.round(y_pred), tf.float32)
-
-        true_positives = tf.reduce_sum(y_true * y_pred)
-        false_positives = tf.reduce_sum((1 - y_true) * y_pred)
-        false_negatives = tf.reduce_sum(y_true * (1 - y_pred))
-
-        self.true_positives.assign_add(true_positives)
-        self.false_positives.assign_add(false_positives)
-        self.false_negatives.assign_add(false_negatives)
+    def update_state(self, y_true, y_pred,sample_weight=None):
+        self.precision.update_state(y_true, y_pred)
+        self.recall.update_state(y_true, y_pred)
 
     def result(self):
-        precision = self.true_positives / (self.true_positives + self.false_positives + tf.keras.backend.epsilon())
-        recall = self.true_positives / (self.true_positives + self.false_negatives + tf.keras.backend.epsilon())
+        return 2 * self.precision.result() * self.recall.result() / (self.precision.result() + self.recall.result())
 
-        f1 = 2 * (precision * recall) / (precision + recall + tf.keras.backend.epsilon())
-        return f1
+    def reset_state(self):
+        self.precision.reset_states()
+        self.recall.reset_states()
 
 
 def create_model_2conv():
@@ -179,7 +171,7 @@ def create_model_2conv():
     # optimizer = RMSprop(learning_rate=learning_rate)
     optz = keras.optimizers.Adam(learning_rate=learning_rate)
     #try to use hinge,focal,logistic loss
-    model.compile(loss='binary_crossentropy', optimizer=optz,  metrics=['accuracy', F1Score()])
+    model.compile(loss='binary_crossentropy', optimizer=optz,  metrics=[F1Score()])
     return model
 
 
@@ -307,6 +299,7 @@ def get_model(train_ds,val_ds,test_ds,create = True):
         #train model and save best epoch
         # Fit the model on the training data.
         # The KerasPruningCallback checks for pruning condition every epoch.
+        # tensorboard --logdir logs/fit
         log_dir = "logs/fit/" + datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
         tensorboard_callback = tf.keras.callbacks.TensorBoard(log_dir=log_dir, histogram_freq=1)
 
@@ -333,11 +326,11 @@ if __name__ == "__main__":
     
     train_ds,val_ds,test_ds = get_dataset(create=True)
     #train_ds,val_ds,test_ds = get_datasets(data_path)
-    model = get_model(train_ds,val_ds,test_ds,False)
+    model = get_model(train_ds,val_ds,test_ds,True)
     
 
 
-    feature_extractor = Model(inputs=model.input, outputs=model.layers[-7].output)
+    feature_extractor = Model(inputs=model.input, outputs=model.layers[-5].output)
     features_list,labels_list = extract_features(train_ds,feature_extractor) #keys are features, values are labels
     
     plot_pca(features_list,labels_list)

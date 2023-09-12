@@ -2,12 +2,13 @@ import datetime
 import re
 from matplotlib import pyplot as plt
 from sklearn.decomposition import PCA
+from sklearn.manifold import TSNE
 import tensorflow as tf
 import numpy as np
 from kymatio.keras import Scattering1D
 import optuna
 from keras.layers import Dense,Dropout,Lambda
-from keras.models import Model
+from keras.models import Model,save_model
 from tensorflow import keras
 from keras.optimizers import RMSprop
 from keras.utils import to_categorical
@@ -16,13 +17,13 @@ from keras.callbacks import ModelCheckpoint
 from tfrecord_generator.create_ds import get_datasets,get_inputs
 from models import create_model, CLASSES
 from keras import backend as K
-
+import plotly 
 
 
 N_TRAIN_EXAMPLES = 3000
 N_VALID_EXAMPLES = 1000
 BATCHSIZE = 16
-EPOCHS = 3
+EPOCHS = 2
 CLASSES = CLASSES
 WINDOW_SIZE = 256
 CHANNELS = 6
@@ -55,22 +56,22 @@ def create_conv_block(inputs,inputs_shape =None):
     return cx
 
 
-def apply_scattering_1d(input_layer):
-    channels = Lambda(lambda x: tf.unstack(x, axis=-1))(input_layer)
-    #input_layer_shape = input_layer.shape
-    scattering_1d = Scattering1D(J=7,T=WINDOW_SIZE,Q=3)
-    #scatters = scattering_1d(input_layer)
-    scatters = []
-    #print('Starting scattering....')
-    for channel in channels:
-        s = scattering_1d(channel)
-        scatters.append(s)
-    #print('Finished scattering....')
-    # channels = []
-    # for s in scatters:
-    #     channels.append(s[:,:,0])
-    # channels = tf.stack(channels,axis=2)
-    return scatters
+# def apply_scattering_1d(input_layer):
+#     channels = keras.layers.Lambda(lambda x: tf.unstack(x, axis=-1))(input_layer)
+#     #input_layer_shape = input_layer.shape
+#     scattering_1d = Scattering1D(J=7,T=WINDOW_SIZE,Q=3)
+#     #scatters = scattering_1d(input_layer)
+#     scatters = []
+#     #print('Starting scattering....')
+#     for channel in channels:
+#         s = scattering_1d(channel)
+#         scatters.append(s)
+#     #print('Finished scattering....')
+#     # channels = []
+#     # for s in scatters:
+#     #     channels.append(s[:,:,0])
+#     # channels = tf.stack(channels,axis=2)
+#     return scatters
 
 def conv_block2(inputs,input_shape =None):
     #print('Applying conv block 2 ....')
@@ -100,13 +101,14 @@ def conv_block1(inputs):
     #print('Finished conv block 1')
     return conved_inputs
 
-@keras.saving.register_keras_serializable(package="My_Layers")
+#@keras.saving.register_keras_serializable(package="My_Layers")
 class CustomLayer(keras.layers.Layer):
     def __init__(self,J):
         super().__init__()
         self.J = J
+        self.scattering_1d = Scattering1D(J=7,T=WINDOW_SIZE,Q=3)
     def call(self, inputs):
-        return apply_scattering_1d(inputs)
+        return self.scattering_1d(inputs)
 
     def get_config(self):
         return {"J": self.J}
@@ -116,7 +118,7 @@ class CustomLayer(keras.layers.Layer):
 #     return apply_scattering_1d(x)
 
 
-@keras.utils.register_keras_serializable(package="my_package", name="f1_score")
+#@keras.utils.register_keras_serializable(package="my_package", name="f1_score")
 class F1Score(keras.metrics.Metric):
     def __init__(self, name="f1_score", **kwargs):
         super(F1Score, self).__init__(name=name, **kwargs)
@@ -147,14 +149,15 @@ class F1Score(keras.metrics.Metric):
 def create_model_2conv():
     input_shape = (WINDOW_SIZE,CHANNELS)
     input_layer = Input(shape=input_shape, name='acc_gyr')
+    channels = keras.layers.Lambda(lambda x: tf.unstack(x, axis=-1))(input_layer)
     custom_scattering1d =CustomLayer(7)
-    scatters = custom_scattering1d(input_layer)
-    #scatters = apply_scattering_1d(input_layer)#for each channel
-    # Create the convolutional block for the single input
+    scatters = []
+    for channel in channels:
+        s = custom_scattering1d(channel)
+        scatters.append(s)
     x = conv_block1(scatters)
     x = conv_block2(x)
-    #x = conv_block3(trial,x)
-    #x = conv_block4(trial,x)
+
     concat_layer = Concatenate(axis=2)
     x= concat_layer(x)
     #x= conv_block3(trial,x)
@@ -216,7 +219,7 @@ def _load_model(train_ds,val_ds,test_ds):
     #load Yonis_model.h5
     model_path = 'Yonis_model.h5'
     #load the model
-    model = load_model(model_path,custom_objects={'f1_score':F1Score,'CustomLayer':CustomLayer})
+    model = load_model(model_path,custom_objects={'F1Score':F1Score,'CustomLayer':CustomLayer})
     #model.summary()
     #model.fit(train_ds,epochs=1)
     #continue training
@@ -230,98 +233,113 @@ def _load_model(train_ds,val_ds,test_ds):
     print(acc)
     print(f_one)
     print(loss)
+    return model
 
 
 def extract_features(tfrecord_dataset,feature_extractor):
-    #iterate over tfrecord_dataset and extract features
-    # iterator = tfrecord_dataset.make_one_shot_iterator()
-    # features = iterator.get_next()
-    # loop on tfrecord_dataset and extract using tfrecord_dataset.take()
+    number_of_batches = 20
     features_list = []
     labels_list = [] 
-    j = 0
-    while j//BATCHSIZE < 8:
-        try:
-            one_batch_dataset = tfrecord_dataset.take(1)
-            for features_batch, labels_batch in one_batch_dataset:
-                # batch is now a single batch from your dataset
-                # batch['feature_name'] will be a tensor containing the 'feature_name' feature for all elements in this batch
-                for i in range(BATCHSIZE):
-                    # For each element in the batch, extract and process the features as needed
-                    single_element_features = features_batch[i]
-                    #turn single_element_features with shape (256,6) to (None,256,6)
-                    single_element_features = tf.expand_dims(single_element_features, axis=0)
-                    features = feature_extractor(single_element_features)
-                    features = features.numpy()
-                    single_element_label = labels_batch[i]
-                    label  = single_element_label.numpy()
-                    #convert label to int
-                    label = int(label)
-                    features_list.append(features)
-                    labels_list.append(label)
 
-        except tf.errors.OutOfRangeError:
-            break
-        j = j+ 1
+    try:
+        batches = tfrecord_dataset.take(number_of_batches)
+        for batch in batches:
+            for sample_features, sample_label in zip(batch[0],batch[1]): #inner for should be done with enumarate 
+                # batch is now a single batch from your dataset
+                # batch['feature_name'] will be a tensor containing the 'feature_name' feature for all elements in this batch:
+                # For each element in the batch, extract and process the features as needed
+                #turn sample_features with shape (256,6) to (None,256,6)
+                sample_features = tf.expand_dims(sample_features, axis=0)
+                features = feature_extractor(sample_features)
+                features = features.numpy()
+                label  = sample_label.numpy()
+                #convert label to int
+                label = int(label)
+                features_list.append(features)
+                labels_list.append(label)       
+    except Exception as e:
+        print("some problem iterating on ds")
+    
     return features_list,labels_list
 
 
 def plot_pca(features,labels):
-    #reduce features dim from (16,1,128) to (16,128). features is a list
     features = np.array(features)
     labels = np.array(labels)
-    features = features.squeeze(axis=1)
-    pca = PCA(n_components=2)
-    principal_components = pca.fit_transform(features)
-    plt.figure()
-    colors = ['b', 'r']
-    target_names = [0, 1]
+    print(labels.shape)
+    features = features.squeeze(axis=1)#256 512
+    tsne = TSNE(n_components=2, random_state=42)  # You can specify the number of components (usually 2 for visualization)
+    pc_a = PCA(n_components=2, random_state=42)
+    x_pca = pc_a.fit_transform(features)
+    X_tsne = tsne.fit_transform(features)
+    plt.figure(figsize=(10, 8))
+    #remove duplicates from X_tsne 
+    print(X_tsne.shape)
+    #X_set = set(X_tsne)
+    #X_tsne = np.unique(X_tsne, axis=0)
+    #print(X_set)
+    #print(X_tsne[:, 0])
+    #print(X_tsne[:, 1])
+    scatter = plt.scatter(X_tsne[:, 0], X_tsne[:, 1], c=labels, cmap='viridis', marker='o', s=30, alpha=0.9)
+    plt.title("t-SNE Visualization")
+    plt.xlabel("t-SNE Dimension 1")
+    plt.ylabel("t-SNE Dimension 2")
+    plt.colorbar(scatter, label="Labels")
+    #plt.show()
 
-    for color, i, target_name in zip(colors, [0, 1], target_names):
-        plt.scatter(principal_components[labels == i, 0], 
-                    principal_components[labels == i, 1], 
-                    color=color, 
-                    label=target_name)
 
-    plt.legend(loc='best')
-    plt.title('PCA of Dataset')
-    plt.xlabel('Principal Component 1')
-    plt.ylabel('Principal Component 2')
-    plt.show()
+    #plot scatter of X_tsne with labels in plotly
+    import plotly.express as px
+    fig = px.scatter(X_tsne, x=X_tsne[:, 0], y=X_tsne[:, 1], color=labels)
+    fig.show()
 
 
+def get_dataset(create = True):
+    data_path, batch_size,max_window_size,new_label_name,new_label_func,chosen_features ,label_name = get_inputs()
+    if create:
+        train_ds,val_ds,test_ds = get_datasets(data_path, batch_size,max_window_size,new_label_name,new_label_func,chosen_features ,label_name)
+    else :
+        train_ds,val_ds,test_ds = get_datasets(data_path)
+    return train_ds,val_ds,test_ds
+
+def get_model(train_ds,val_ds,test_ds,create = True):
+    if create:
+        model = create_model_2conv()
+        #train model and save best epoch
+        # Fit the model on the training data.
+        # The KerasPruningCallback checks for pruning condition every epoch.
+        log_dir = "logs/fit/" + datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+        tensorboard_callback = tf.keras.callbacks.TensorBoard(log_dir=log_dir, histogram_freq=1)
+
+        model.fit(
+            train_ds,
+            batch_size=BATCHSIZE,
+            callbacks=[ModelCheckpoint(filepath = '/tmp/checkpoint',monitor=F1Score,save_best_only=True,mode='max'),tensorboard_callback],
+            epochs=EPOCHS,
+            validation_data=val_ds,
+            verbose=1,
+        )
+        loss,acc,f_one = model.evaluate(test_ds, verbose=0)
+        print(f_one)
+        print(loss)
+
+        save_model(model,'Yonis_model.h5')
+
+    else:
+        model =_load_model(train_ds,val_ds,test_ds)
+    
+    return model
 
 if __name__ == "__main__":
     
-    data_path, batch_size,max_window_size,new_label_name,new_label_func,chosen_features ,label_name = get_inputs()
-    train_ds,val_ds,test_ds = get_datasets(data_path, batch_size,max_window_size,new_label_name,new_label_func,chosen_features ,label_name)
+    train_ds,val_ds,test_ds = get_dataset(create=True)
     #train_ds,val_ds,test_ds = get_datasets(data_path)
+    model = get_model(train_ds,val_ds,test_ds,False)
     
-    model = create_model_2conv()
-    #train model and save best epoch
-    # Fit the model on the training data.
-    # The KerasPruningCallback checks for pruning condition every epoch.
-    log_dir = "logs/fit/" + datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
-    tensorboard_callback = tf.keras.callbacks.TensorBoard(log_dir=log_dir, histogram_freq=1)
-
-    model.fit(
-        train_ds,
-        batch_size=BATCHSIZE,
-        callbacks=[ModelCheckpoint(filepath = '/tmp/checkpoint',monitor=f1_score,save_best_only=True,mode='max'),tensorboard_callback],
-        epochs=EPOCHS,
-        validation_data=val_ds,
-        verbose=1,
-    )
-    loss,acc,f_one = model.evaluate(test_ds, verbose=0)
-    print(f_one)
-    print(loss)
-
-    model.save('Yonis_model.h5')
-    #_load_model(train_ds,val_ds,test_ds)
 
 
-    feature_extractor = Model(inputs=model.input, outputs=model.layers[-4].output)
+    feature_extractor = Model(inputs=model.input, outputs=model.layers[-6].output)
     features_list,labels_list = extract_features(test_ds,feature_extractor) #keys are features, values are labels
     
     plot_pca(features_list,labels_list)
-    print('f1_score: ',f_one)
+    #print('f1_score: ',f_one)
